@@ -329,6 +329,28 @@ namespace property_exchange {
 `make_rjson()` writes a `header_options` value as a JSON number if the value is an integer.
 It writes all other values as JSON strings.
 
+These functions read a Property Exchange header or property data. They do not allocate, and they read only
+up to the value they look for, so they do not validate the rest of the JSON text:
+
+```cpp
+namespace property_exchange {
+
+    // the text of the value of member `key` of a JSON object, without surrounding white space
+    constexpr std::optional<std::string_view> find_rjson_value(std::string_view json, std::string_view key);
+
+    constexpr std::optional<std::string_view> rjson_string(std::string_view value); // escapes stay as they are
+    constexpr std::optional<int>              rjson_integer(std::string_view value);
+    constexpr std::optional<bool>             rjson_bool(std::string_view value);
+
+    // calls `f` with the text of each array element, returns false for a malformed array
+    template<typename F>
+    constexpr bool for_each_rjson_element(std::string_view value, F&& f);
+}
+```
+
+The readers return no value if the text is not of the type asked for, for example `rjson_integer()` for `1.5`
+or for a number beyond the `int` range.
+
 ### Process Inquiry
 
 ```cpp
@@ -522,16 +544,18 @@ struct property_exchange::property_data_message_view
 {
     uint7_t request_id() const;
 
-    const uint7_t* header_begin() const;
-    const uint7_t* header_end() const;
-    size_t         header_size() const;
+    const uint7_t*   header_begin() const;
+    const uint7_t*   header_end() const;
+    size_t           header_size() const;
+    std::string_view header_text() const;
 
     uint14_t number_of_chunks() const;
     uint14_t number_of_this_chunk() const;
 
-    const uint7_t* chunk_begin() const;
-    const uint7_t* chunk_end() const;
-    size_t         chunk_size() const;
+    const uint7_t*   chunk_begin() const;
+    const uint7_t*   chunk_end() const;
+    size_t           chunk_size() const;
+    std::string_view chunk_text() const;
 };
 
 struct get_property_data_view : property_exchange::property_data_message_view {};
@@ -543,7 +567,8 @@ struct notify_view            : property_exchange::property_data_message_view {}
 `property_exchange_capabilities_view`, `get_property_data_view`, `set_property_data_view` and `subscription_view`
 accept the inquiry and the reply.
 
-The library does not parse the header JSON. Use your own JSON parser on the range from `header_begin()` to `header_end()`.
+`header_text()` and `chunk_text()` return the header and the chunk as text. Read single values from them with
+`find_rjson_value()` and the other readers of the `property_exchange` namespace. For more, use a JSON parser.
 
 ### Process Inquiry Views
 

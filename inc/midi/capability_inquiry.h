@@ -626,6 +626,25 @@ namespace property_exchange {
     std::string make_rjson(std::string_view key, std::string_view value, const header_options& options);
     std::string make_rjson(std::string_view key, int value, const header_options& options);
 
+    //! Reading Property Exchange headers and property data. The readers do not allocate, and do not
+    //! validate the whole JSON text: they read up to the value they look for.
+
+    //! Returns the text of the value of member `key` of the JSON object `json`, without surrounding
+    //! white space. No value if `json` is not an object, has no member `key`, or is malformed before it.
+    constexpr std::optional<std::string_view> find_rjson_value(std::string_view json, std::string_view key);
+
+    //! Returns the characters between the quotes of a JSON string value. Escape sequences stay as they are.
+    constexpr std::optional<std::string_view> rjson_string(std::string_view value);
+    //! Returns a JSON integer value. No value for a fraction, an exponent or a value beyond the int range.
+    constexpr std::optional<int> rjson_integer(std::string_view value);
+    //! Returns a JSON true or false value.
+    constexpr std::optional<bool> rjson_bool(std::string_view value);
+
+    //! Calls `f` with the text of each element of the JSON array `value`, without surrounding white space.
+    //! Returns false if `value` is not an array or is malformed.
+    template<typename F>
+    constexpr bool for_each_rjson_element(std::string_view value, F&& f);
+
     // common resource names
     // Foundational Resources
     inline constexpr std::string_view ResourceList{ "ResourceList" };
@@ -660,16 +679,18 @@ namespace property_exchange {
 
         uint7_t request_id() const;
 
-        const uint7_t* header_begin() const;
-        const uint7_t* header_end() const;
-        size_t         header_size() const;
+        const uint7_t*   header_begin() const;
+        const uint7_t*   header_end() const;
+        size_t           header_size() const;
+        std::string_view header_text() const;
 
         uint14_t number_of_chunks() const;
         uint14_t number_of_this_chunk() const;
 
-        const uint7_t* chunk_begin() const;
-        const uint7_t* chunk_end() const;
-        size_t         chunk_size() const;
+        const uint7_t*   chunk_begin() const;
+        const uint7_t*   chunk_end() const;
+        size_t           chunk_size() const;
+        std::string_view chunk_text() const;
 
         static bool validate(const sysex7&);
 
@@ -1797,6 +1818,194 @@ inline std::string property_exchange::make_rjson(std::string_view key, int value
     return std::string{ "{\"" } + std::string{ key } + "\":" + std::to_string(value) + "}";
 }
 
+//---- property_exchange RJSON readers
+
+namespace property_exchange::rjson_detail {
+    constexpr auto npos = std::string_view::npos;
+
+    constexpr bool is_space(char c)
+    {
+        return (c == ' ') || (c == '\t') || (c == '\n') || (c == '\r');
+    }
+
+    constexpr size_t skip_space(std::string_view s, size_t pos)
+    {
+        while ((pos < s.size()) && is_space(s[pos]))
+            ++pos;
+        return pos;
+    }
+
+    constexpr std::string_view trim(std::string_view s)
+    {
+        s.remove_prefix(skip_space(s, 0));
+        while (!s.empty() && is_space(s.back()))
+            s.remove_suffix(1);
+        return s;
+    }
+
+    //! The position after the closing quote of the string that starts at `pos`, or npos
+    constexpr size_t end_of_string(std::string_view s, size_t pos)
+    {
+        for (++pos; pos < s.size(); ++pos)
+        {
+            if (s[pos] == '\\')
+                ++pos;
+            else if (s[pos] == '"')
+                return pos + 1;
+        }
+        return npos;
+    }
+
+    //! The position after the value that starts at `pos`, or npos
+    constexpr size_t end_of_value(std::string_view s, size_t pos)
+    {
+        if (pos >= s.size())
+            return npos;
+
+        if (s[pos] == '"')
+            return end_of_string(s, pos);
+
+        if ((s[pos] == '{') || (s[pos] == '['))
+        {
+            int depth = 0;
+            while (pos < s.size())
+            {
+                if (s[pos] == '"')
+                {
+                    pos = end_of_string(s, pos);
+                    if (pos == npos)
+                        return npos;
+                    continue;
+                }
+                if ((s[pos] == '{') || (s[pos] == '['))
+                    ++depth;
+                else if (((s[pos] == '}') || (s[pos] == ']')) && (--depth == 0))
+                    return pos + 1;
+                ++pos;
+            }
+            return npos;
+        }
+
+        // a number, true, false or null
+        const auto begin = pos;
+        while ((pos < s.size()) && !is_space(s[pos]) && (s[pos] != ',') && (s[pos] != '}') && (s[pos] != ']'))
+            ++pos;
+        return (pos == begin) ? npos : pos;
+    }
+} // namespace property_exchange::rjson_detail
+
+constexpr std::optional<std::string_view> property_exchange::find_rjson_value(std::string_view json,
+                                                                              std::string_view key)
+{
+    using namespace rjson_detail;
+
+    size_t pos = skip_space(json, 0);
+    if ((pos >= json.size()) || (json[pos] != '{'))
+        return std::nullopt;
+
+    pos = skip_space(json, pos + 1);
+    while ((pos < json.size()) && (json[pos] == '"'))
+    {
+        const auto name_end = end_of_string(json, pos);
+        if (name_end == npos)
+            return std::nullopt;
+        const auto name = json.substr(pos + 1, name_end - pos - 2);
+
+        pos = skip_space(json, name_end);
+        if ((pos >= json.size()) || (json[pos] != ':'))
+            return std::nullopt;
+
+        pos                  = skip_space(json, pos + 1);
+        const auto value_end = end_of_value(json, pos);
+        if (value_end == npos)
+            return std::nullopt;
+        if (name == key)
+            return json.substr(pos, value_end - pos);
+
+        pos = skip_space(json, value_end);
+        if ((pos >= json.size()) || (json[pos] != ','))
+            break;
+        pos = skip_space(json, pos + 1);
+    }
+    return std::nullopt;
+}
+
+constexpr std::optional<std::string_view> property_exchange::rjson_string(std::string_view value)
+{
+    value = rjson_detail::trim(value);
+    if ((value.size() < 2) || (value.front() != '"') || (rjson_detail::end_of_string(value, 0) != value.size()))
+        return std::nullopt;
+    return value.substr(1, value.size() - 2);
+}
+
+constexpr std::optional<int> property_exchange::rjson_integer(std::string_view value)
+{
+    value = rjson_detail::trim(value);
+
+    const bool negative = !value.empty() && (value.front() == '-');
+    if (negative)
+        value.remove_prefix(1);
+    if (value.empty())
+        return std::nullopt;
+
+    long long result = 0;
+    for (const char c : value)
+    {
+        if ((c < '0') || (c > '9'))
+            return std::nullopt;
+        result = result * 10 + (c - '0');
+        if (result > 0x80000000LL)
+            return std::nullopt;
+    }
+    if (negative)
+        result = -result;
+    if ((result < -0x80000000LL) || (result > 0x7FFFFFFFLL))
+        return std::nullopt;
+    return int(result);
+}
+
+constexpr std::optional<bool> property_exchange::rjson_bool(std::string_view value)
+{
+    value = rjson_detail::trim(value);
+    if (value == "true")
+        return true;
+    if (value == "false")
+        return false;
+    return std::nullopt;
+}
+
+template<typename F>
+constexpr bool property_exchange::for_each_rjson_element(std::string_view value, F&& f)
+{
+    using namespace rjson_detail;
+
+    value = trim(value);
+    if (value.empty() || (value.front() != '['))
+        return false;
+
+    size_t pos = skip_space(value, 1);
+    if ((pos < value.size()) && (value[pos] == ']'))
+        return pos + 1 == value.size();
+
+    while (pos < value.size())
+    {
+        const auto element_end = end_of_value(value, pos);
+        if (element_end == npos)
+            return false;
+        f(value.substr(pos, element_end - pos));
+
+        pos = skip_space(value, element_end);
+        if (pos >= value.size())
+            return false;
+        if (value[pos] == ']')
+            return pos + 1 == value.size();
+        if (value[pos] != ',')
+            return false;
+        pos = skip_space(value, pos + 1);
+    }
+    return false;
+}
+
 //---- property_exchange::property_data_message_view
 
 struct property_exchange::property_data_message_view::field_offsets : capability_inquiry_view::field_offsets
@@ -1830,6 +2039,11 @@ inline size_t property_exchange::property_data_message_view::header_size() const
     return sx.make_uint14(field_offsets::header_size);
 }
 
+inline std::string_view property_exchange::property_data_message_view::header_text() const
+{
+    return { reinterpret_cast<const char*>(header_begin()), header_size() };
+}
+
 inline std::uint16_t property_exchange::property_data_message_view::number_of_chunks() const
 {
     return sx.make_uint14(field_offsets::num_chunks + header_size());
@@ -1853,6 +2067,11 @@ inline const uint7_t* property_exchange::property_data_message_view::chunk_end()
 inline size_t property_exchange::property_data_message_view::chunk_size() const
 {
     return sx.make_uint14(field_offsets::chunk_size + header_size());
+}
+
+inline std::string_view property_exchange::property_data_message_view::chunk_text() const
+{
+    return { reinterpret_cast<const char*>(chunk_begin()), chunk_size() };
 }
 
 //---- property_exchange_capabilities_view

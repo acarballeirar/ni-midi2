@@ -1749,3 +1749,117 @@ TEST_F(ci_property_exchange, notify)
 }
 
 //-----------------------------------------------
+
+//-----------------------------------------------
+
+TEST_F(ci_property_exchange, find_rjson_value)
+{
+    using namespace midi::ci::property_exchange;
+
+    EXPECT_EQ("\"DeviceInfo\"", find_rjson_value(R"({"resource":"DeviceInfo"})", "resource"));
+    EXPECT_EQ("\"DeviceInfo\"", find_rjson_value(R"( { "resId" : "x" , "resource" : "DeviceInfo" } )", "resource"));
+    EXPECT_EQ("42", find_rjson_value(R"({"offset":42,"limit":10})", "offset"));
+    EXPECT_EQ("10", find_rjson_value(R"({"offset":42,"limit":10})", "limit"));
+    EXPECT_EQ("true", find_rjson_value(R"({"a":{"b":[1,{"c":"}]"}]},"d":true})", "d"));
+    EXPECT_EQ(R"({"b":[1,{"c":"}]"}]})", find_rjson_value(R"({"a":{"b":[1,{"c":"}]"}]},"d":true})", "a"));
+    EXPECT_EQ(R"("a\"b")", find_rjson_value(R"({"x":"a\"b","y":1})", "x"));
+    EXPECT_EQ("1", find_rjson_value(R"({"x":"a\"b","y":1})", "y"));
+
+    EXPECT_FALSE(find_rjson_value(R"({"resource":"DeviceInfo"})", "res"));
+    EXPECT_FALSE(find_rjson_value(R"({"resourceX":"DeviceInfo"})", "resource"));
+    EXPECT_FALSE(find_rjson_value(R"({"a":1})", "resource"));
+    EXPECT_FALSE(find_rjson_value(R"({})", "resource"));
+    EXPECT_FALSE(find_rjson_value("", "resource"));
+    EXPECT_FALSE(find_rjson_value(R"(["resource"])", "resource"));
+    EXPECT_FALSE(find_rjson_value(R"({"a" 1,"resource":"x"})", "resource"));
+    EXPECT_FALSE(find_rjson_value(R"({"a":"unterminated,"resource":"x"})", "resource"));
+    EXPECT_FALSE(find_rjson_value(R"({"a":[1,2,"resource":"x"})", "resource"));
+}
+
+TEST_F(ci_property_exchange, rjson_values)
+{
+    using namespace midi::ci::property_exchange;
+
+    EXPECT_EQ("DeviceInfo", rjson_string("\"DeviceInfo\""));
+    EXPECT_EQ("", rjson_string(" \"\" "));
+    EXPECT_EQ(R"(a\"b)", rjson_string(R"("a\"b")"));
+    EXPECT_FALSE(rjson_string("DeviceInfo"));
+    EXPECT_FALSE(rjson_string("\"DeviceInfo"));
+    EXPECT_FALSE(rjson_string(R"("a" "b")"));
+
+    EXPECT_EQ(0, rjson_integer("0"));
+    EXPECT_EQ(127, rjson_integer(" 127 "));
+    EXPECT_EQ(-5, rjson_integer("-5"));
+    EXPECT_EQ(2147483647, rjson_integer("2147483647"));
+    EXPECT_EQ(-2147483647 - 1, rjson_integer("-2147483648"));
+    EXPECT_FALSE(rjson_integer("2147483648"));
+    EXPECT_FALSE(rjson_integer("99999999999999999999"));
+    EXPECT_FALSE(rjson_integer("1.5"));
+    EXPECT_FALSE(rjson_integer("1e3"));
+    EXPECT_FALSE(rjson_integer("-"));
+    EXPECT_FALSE(rjson_integer(""));
+    EXPECT_FALSE(rjson_integer("\"1\""));
+
+    EXPECT_EQ(true, rjson_bool("true"));
+    EXPECT_EQ(false, rjson_bool(" false"));
+    EXPECT_FALSE(rjson_bool("1"));
+    EXPECT_FALSE(rjson_bool("True"));
+}
+
+TEST_F(ci_property_exchange, for_each_rjson_element)
+{
+    using namespace midi::ci::property_exchange;
+
+    std::vector<std::string_view> elements;
+    const auto                    collect = [&](std::string_view e) { elements.push_back(e); };
+
+    EXPECT_TRUE(for_each_rjson_element("[1, 2 ,3]", collect));
+    EXPECT_EQ((std::vector<std::string_view>{ "1", "2", "3" }), elements);
+
+    elements.clear();
+    EXPECT_TRUE(for_each_rjson_element(R"( [ "a,b" , {"c":[1,2]} , [3] ] )", collect));
+    EXPECT_EQ((std::vector<std::string_view>{ R"("a,b")", R"({"c":[1,2]})", "[3]" }), elements);
+
+    elements.clear();
+    EXPECT_TRUE(for_each_rjson_element("[]", collect));
+    EXPECT_TRUE(for_each_rjson_element(" [ ] ", collect));
+    EXPECT_TRUE(elements.empty());
+
+    EXPECT_FALSE(for_each_rjson_element("", collect));
+    EXPECT_FALSE(for_each_rjson_element("1", collect));
+    EXPECT_FALSE(for_each_rjson_element("[1,2", collect));
+    EXPECT_FALSE(for_each_rjson_element("[1 2]", collect));
+    EXPECT_FALSE(for_each_rjson_element("[1,]", collect));
+    EXPECT_FALSE(for_each_rjson_element("[1] x", collect));
+}
+
+TEST_F(ci_property_exchange, property_data_message_view_text)
+{
+    using namespace midi::ci;
+    using namespace midi::ci::property_exchange;
+
+    const auto inquiry = make_get_property_data_inquiry(0x01234567, 0x07654321, "ModeList", 3);
+    const auto view    = as<get_property_data_view>(inquiry);
+    ASSERT_TRUE(view);
+    EXPECT_EQ(R"({"resource":"ModeList"})", view->header_text());
+    EXPECT_EQ("ModeList", rjson_string(find_rjson_value(view->header_text(), tags::resource).value()));
+    EXPECT_TRUE(view->chunk_text().empty());
+
+    const std::string data = "[64,1,127]";
+    const auto        set =
+      make_set_property_data_inquiry(0x01234567, 0x07654321, "X-Notes", 1, 1, chunk{ data.data(), data.size() }, 4);
+    const auto set_view = as<set_property_data_view>(set);
+    ASSERT_TRUE(set_view);
+    EXPECT_EQ(data, set_view->chunk_text());
+
+    int sum = 0;
+    EXPECT_TRUE(
+      for_each_rjson_element(set_view->chunk_text(), [&](std::string_view e) { sum += rjson_integer(e).value_or(0); }));
+    EXPECT_EQ(192, sum);
+}
+
+//-----------------------------------------------
+
+static_assert(midi::ci::property_exchange::rjson_integer(
+                midi::ci::property_exchange::find_rjson_value(R"({"limit":10})", "limit").value()) == 10);
+static_assert(midi::ci::property_exchange::rjson_bool("true").value());

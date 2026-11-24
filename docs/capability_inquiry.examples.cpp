@@ -160,8 +160,11 @@ void property_exchange_examples()
 
     if (auto v = ci::as<ci::get_property_data_view>(inquiry))
     {
-        const auto header = std::string_view{ reinterpret_cast<const char*>(v->header_begin()), v->header_size() };
-        assert(header == R"({"resource":"DeviceInfo"})");
+        assert(v->header_text() == R"({"resource":"DeviceInfo"})");
+
+        // the responder reads the resource name from the header
+        const auto resource = find_rjson_value(v->header_text(), tags::resource);
+        assert(resource && rjson_string(*resource) == DeviceInfo);
 
         // the responder replies in a single chunk
         const std::string body = R"({"manufacturer":"Native Instruments"})";
@@ -181,6 +184,23 @@ void property_exchange_examples()
     // header options are added to the header JSON, numbers are written without quotes
     assert(make_rjson(tags::resource, ChannelList, header_options{ { tags::offset, "0" }, { tags::limit, "10" } }) ==
            R"({"resource":"ChannelList","offset":0,"limit":10})");
+
+    // the readers find a member in any order and convert values, without allocating
+    constexpr std::string_view header = R"({"offset": 20, "resource": "ChannelList", "limit": 10})";
+    static_assert(rjson_integer(find_rjson_value(header, tags::limit).value()) == 10);
+
+    // the property data of a Set Property Data inquiry is an array of integers
+    const std::string notes = "[60, 64, 67]";
+    const sysex7      set =
+      ci::make_set_property_data_inquiry(initiator_muid, responder_muid, "X-Chord", 1, 1, chunk{ notes }, request_id);
+
+    if (auto v = ci::as<ci::set_property_data_view>(set))
+    {
+        int        sum = 0;
+        const bool ok  = for_each_rjson_element(
+          v->chunk_text(), [&sum](std::string_view element) { sum += rjson_integer(element).value_or(0); });
+        assert(ok && sum == 191);
+    }
 }
 
 void process_inquiry_examples()

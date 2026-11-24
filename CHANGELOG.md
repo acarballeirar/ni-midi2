@@ -1,3 +1,9 @@
+# Unreleased
+
+* add Property Exchange RJSON readers, which do not allocate: `find_rjson_value()`, `rjson_string()`, `rjson_integer()`, `rjson_bool()` and `for_each_rjson_element()`
+* add `property_data_message_view::header_text()` and `chunk_text()`
+* document the RJSON readers in `docs/capability_inquiry.md`, with examples
+
 # v1.14.0
 
 * add `same_profile()`, which compares a Standard Defined Profile ID by bytes 1 to 3
