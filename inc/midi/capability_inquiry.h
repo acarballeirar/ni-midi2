@@ -323,14 +323,25 @@ message make_nak_message(muid_t    source_muid,
                          uint7_t   status_data,
                          uint7_t   details[5],
                          const std::string_view&);
+//! NAK to the message in r, from the destination MUID of r. Not for a message to the broadcast MUID.
 message make_nak_message(const capability_inquiry_view& r,
                          uint7_t                        status_code,
                          uint7_t                        status_data,
                          uint7_t                        details[5],
                          const std::string_view&);
+//! NAK to the message in r, from source_muid. Also for a message to the broadcast MUID.
+message make_nak_message(muid_t                         source_muid,
+                         const capability_inquiry_view& r,
+                         uint7_t                        status_code,
+                         uint7_t                        status_data,
+                         const uint7_t                  details[5],
+                         const std::string_view&);
 
 message make_nak_message_v1(muid_t source_muid, muid_t destination_muid, uint7_t device_id);
-message make_nak_message_v1(const capability_inquiry_view&);
+//! NAK to the message in r, from the destination MUID of r. Not for a message to the broadcast MUID.
+message make_nak_message_v1(const capability_inquiry_view& r);
+//! NAK to the message in r, from source_muid. Also for a message to the broadcast MUID.
+message make_nak_message_v1(muid_t source_muid, const capability_inquiry_view& r);
 
 //-----------------------------------------------
 //
@@ -1299,9 +1310,12 @@ inline message make_nak_message_v1(muid_t source_muid, muid_t destination_muid, 
 
 inline message make_nak_message_v1(const capability_inquiry_view& r)
 {
-    auto result    = message{ subtype::nak, r.destination_muid(), r.source_muid(), r.device_id() };
-    result.data[3] = message_version_1;
-    return result;
+    return make_nak_message_v1(r.destination_muid(), r);
+}
+
+inline message make_nak_message_v1(muid_t source_muid, const capability_inquiry_view& r)
+{
+    return make_nak_message_v1(source_muid, r.source_muid(), r.device_id());
 }
 
 inline message make_nak_message(muid_t                  source_muid,
@@ -1327,9 +1341,19 @@ inline message make_nak_message(const capability_inquiry_view& r,
                                 uint7_t                        details[5],
                                 const std::string_view&        msg)
 {
+    return make_nak_message(r.destination_muid(), r, status_code, status_data, details, msg);
+}
+
+inline message make_nak_message(muid_t                         source_muid,
+                                const capability_inquiry_view& r,
+                                uint7_t                        status_code,
+                                uint7_t                        status_data,
+                                const uint7_t                  details[5],
+                                const std::string_view&        msg)
+{
     uint7_t d[] = { r.subtype(), status_code, status_data, details[0], details[1], details[2], details[3], details[4] };
-    auto    m   = message::make_with_payload_size(
-      10 + msg.size(), subtype::nak, r.destination_muid(), r.source_muid(), r.device_id());
+    auto    m =
+      message::make_with_payload_size(10 + msg.size(), subtype::nak, source_muid, r.source_muid(), r.device_id());
     m.data.insert(m.data.end(), d, d + sizeof(d));
     m.add_uint14(static_cast<uint14_t>(msg.size()));
     m.data.insert(m.data.end(), msg.data(), msg.data() + msg.size());

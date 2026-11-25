@@ -1253,6 +1253,31 @@ TEST_F(capability_inquiry, make_nak_message_v1)
 
         SYSEX_ALLOCATOR_VERIFY_DIFF(c, 2);
     }
+
+    {
+        SYSEX_ALLOCATOR_CAPTURE_COUNT(c);
+
+        // a NAK to a message to the broadcast MUID comes from the responder's own MUID
+        auto identity = midi::device_identity{ midi::manufacturer::native_instruments, 0x1730, 49, 0x00010005 };
+        auto rsx      = midi::ci::make_discovery_inquiry_v1(0x2435465, identity, 0x0C, 766);
+        auto r        = midi::capability_inquiry_view{ rsx };
+
+        EXPECT_EQ(midi::ci::broadcast_muid, r.destination_muid());
+
+        auto sx = midi::ci::make_nak_message_v1(0x1234567, r);
+
+        EXPECT_TRUE(VUT::validate(sx));
+
+        auto m = VUT{ sx };
+
+        EXPECT_EQ(midi::ci::subtype::nak, m.subtype());
+        EXPECT_EQ(midi::ci::message_version_1, m.message_version());
+        EXPECT_EQ(0x1234567u, m.source_muid());
+        EXPECT_EQ(0x2435465u, m.destination_muid());
+        EXPECT_EQ(0x7Fu, m.device_id());
+
+        SYSEX_ALLOCATOR_VERIFY_DIFF(c, 2);
+    }
 }
 
 //-----------------------------------------------
@@ -1334,6 +1359,37 @@ TEST_F(capability_inquiry, make_nak_message)
 
         EXPECT_EQ(7u, m.message_length());
         EXPECT_EQ(m.message(), "What?!?");
+
+        SYSEX_ALLOCATOR_VERIFY_DIFF(c, 2);
+    }
+
+    {
+        SYSEX_ALLOCATOR_CAPTURE_COUNT(c);
+
+        // a NAK to a message to the broadcast MUID comes from the responder's own MUID
+        const auto identity = midi::device_identity{ midi::manufacturer::native_instruments, 0x1730, 49, 0x00010005 };
+        const auto inquiry  = midi::ci::make_discovery_inquiry(0x2435465, identity, 0x0C, 766);
+        const auto v        = midi::capability_inquiry_view{ inquiry };
+        const midi::uint7_t d[5] = { 1, 2, 3, 4, 5 };
+
+        EXPECT_EQ(midi::ci::broadcast_muid, v.destination_muid());
+
+        auto sx = midi::ci::make_nak_message(0x1234567, v, 0x02, 0, d, "");
+
+        EXPECT_TRUE(VUT::validate(sx));
+
+        auto m = VUT{ sx };
+
+        EXPECT_EQ(0x7Fu, m.device_id());
+        EXPECT_EQ(2, m.message_version());
+        EXPECT_EQ(0x1234567u, m.source_muid());
+        EXPECT_EQ(0x2435465u, m.destination_muid());
+
+        EXPECT_EQ(midi::ci::subtype::discovery_inquiry, m.transaction());
+        EXPECT_EQ(0x02u, m.status_code());
+        EXPECT_EQ(0u, m.status_data());
+        EXPECT_EQ(0, memcmp(d, m.details(), 5));
+        EXPECT_EQ(0u, m.message_length());
 
         SYSEX_ALLOCATOR_VERIFY_DIFF(c, 2);
     }

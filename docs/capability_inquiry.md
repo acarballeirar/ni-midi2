@@ -69,9 +69,12 @@ message make_nak_message(muid_t source_muid, muid_t destination_muid, uint7_t de
                          uint7_t details[5], const std::string_view& message);
 message make_nak_message(const capability_inquiry_view&, uint7_t status_code, uint7_t status_data,
                          uint7_t details[5], const std::string_view& message);
+message make_nak_message(muid_t source_muid, const capability_inquiry_view&, uint7_t status_code,
+                         uint7_t status_data, const uint7_t details[5], const std::string_view& message);
 
 message make_nak_message_v1(muid_t source_muid, muid_t destination_muid, uint7_t device_id);
 message make_nak_message_v1(const capability_inquiry_view&);
+message make_nak_message_v1(muid_t source_muid, const capability_inquiry_view&);
 
 message make_invalidate_muid_message(muid_t source_muid, muid_t target_muid);
 ```
@@ -88,8 +91,12 @@ namespace category {
 }
 ```
 
-The `make_nak_message()` overloads that take a `capability_inquiry_view` create the reply to the message in the view.
-They swap its source and destination MUIDs, copy its device ID, and use its subtype as the `transaction`.
+The `make_nak_message()` and `make_nak_message_v1()` overloads that take a `capability_inquiry_view` create the reply
+to the message in the view. They send to its source MUID, copy its device ID, and use its subtype as the `transaction`.
+The overloads without `source_muid` send from the destination MUID of the message. For a message to
+`ci::broadcast_muid`, that is not the MUID of the responder, so use the overloads with `source_muid`. M2-101 §5.4
+requires a NAK to a _Discovery_ message with reserved version bits set, and _Discovery_ is always sent to
+`ci::broadcast_muid`.
 
 ### Profile Configuration
 

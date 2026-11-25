@@ -67,6 +67,22 @@ void nak_examples()
             assert(n->message() == "Profile Configuration not supported");
         }
     }
+
+    // a Discovery goes to the broadcast MUID, so the NAK comes from the responder's own MUID
+    const muid_t  my_muid   = 0x2345678;
+    const sysex7  discovery = ci::make_discovery_inquiry(0x1234567, device_identity{}, 0, 512);
+    const uint7_t none[5]   = { 0, 0, 0, 0, 0 };
+
+    if (auto v = ci::as<capability_inquiry_view>(discovery))
+    {
+        const sysex7 nak = ci::make_nak_message(my_muid, *v, 0x02, 0x00, none, "");
+
+        if (auto n = ci::as<ci::nak_view>(nak))
+        {
+            assert(n->source_muid() == my_muid);
+            assert(n->destination_muid() == 0x1234567);
+        }
+    }
 }
 
 void profile_id_examples()

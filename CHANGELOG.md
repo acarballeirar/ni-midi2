@@ -1,3 +1,7 @@
+# v1.15.0
+
+* add `make_nak_message()` and `make_nak_message_v1()` overloads that take the responder's `source_muid` with the request view, for a NAK to a message to the broadcast MUID. The overloads without it send from the destination MUID of the request.
+
 # v1.14.0
 
 * add `same_profile()`, which compares a Standard Defined Profile ID by bytes 1 to 3
